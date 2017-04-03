@@ -156,11 +156,13 @@ bool FPDecoderXED::filter(unsigned char *bytes, size_t nbytes)
     xed_decoded_inst_zero_set_mode(&xedd, &dstate);
     xed_decoded_inst_set_input_chip(&xedd, XED_CHIP_INVALID);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error == XED_ERROR_NONE) { 
+    if (xed_error == XED_ERROR_NONE) {
         iclass = xed_decoded_inst_get_iclass(&xedd);
         icategory = xed_decoded_inst_get_category(&xedd);
         iextension = xed_decoded_inst_get_extension(&xedd);
+        //printf("%d,%d\n",icategory,iextension);
         //iisaset = xed_decoded_inst_get_isa_set(&xedd);
+        //added   XED_EXTENSION_AVX for VEX prefix instructions of echam
         if (icategory == XED_CATEGORY_SSE ||
             icategory == XED_CATEGORY_X87_ALU ||
             iextension == XED_EXTENSION_MMX ||
@@ -169,6 +171,7 @@ bool FPDecoderXED::filter(unsigned char *bytes, size_t nbytes)
             iextension == XED_EXTENSION_SSE3 ||
             iextension == XED_EXTENSION_SSE4 ||
             iextension == XED_EXTENSION_SSE4A ||
+            iextension == XED_EXTENSION_AVX ||
             iextension == XED_EXTENSION_X87 ||
             iclass == XED_ICLASS_BTC) {
             add = true;
@@ -267,14 +270,14 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
     xed_decoded_inst_zero_set_mode(&xedd, &dstate);
     xed_decoded_inst_set_input_chip(&xedd, XED_CHIP_INVALID);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         //fprintf(stderr, "error - unable to decode instruction [code=%s]:  ", xed_error_enum_t2str(xed_error));
         //printInstBytes(stderr, bytes, nbytes);
         //fprintf(stderr, "\n");
         semantics->setDisassembly(Bytes2Str(bytes, nbytes));
         return semantics;
     }
-    
+
     // save disassembly
     //printf("decoded assembly: %s\n", &xedd);
     semantics->setDisassembly(disassemble(&xedd));
@@ -312,7 +315,7 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
     iform = XED_IFORM_INVALID;
     if (!inst) {
         //fprintf(stderr, "error - unable to extract instruction: %s [%p]\n",
-               //semantics->getDisassembly().c_str(), 
+               //semantics->getDisassembly().c_str(),
                //semantics->getAddress());
         operation = new FPOperation(OP_INVALID);
     } else {
@@ -321,7 +324,7 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
     }
     /*if (operation->getType() == OP_NONE || operation->getType() == OP_INVALID) {
         //fprintf(stderr, "error - unhandled instruction: %s [%p]\n",
-               //semantics->getDisassembly().c_str(), 
+               //semantics->getDisassembly().c_str(),
                //semantics->getAddress());
         semantics->add(operation);
         return semantics;
@@ -334,9 +337,9 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
         c_operand = (xed_operand_t*)xed_inst_operand(inst, i);
         c_op_name = xed_operand_name(c_operand);
         c_reg_enum = xed_decoded_inst_get_reg(&xedd, c_op_name);
-        debugData << "OP" << i 
-            << " op-name " << xed_operand_enum_t2str(c_op_name) 
-            << " reg-enum " << xed_reg_enum_t2str(c_reg_enum) 
+        debugData << "OP" << i
+            << " op-name " << xed_operand_enum_t2str(c_op_name)
+            << " reg-enum " << xed_reg_enum_t2str(c_reg_enum)
             << endl;
         if (c_reg_enum == XED_REG_X87PUSH) {
             temp_op = new FPOperation();
@@ -1766,7 +1769,7 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
 
         // TODO: THESE SEMANTICS ARE WRONG.
         // The real semantics are strange and not cleanly representable in my
-        // current schema. If these semantics are to be used for anything 
+        // current schema. If these semantics are to be used for anything
         // except binary blob replacement analysis, they will need to be fixed.
         case XED_IFORM_ADDSUBPS_XMMps_MEMps:
             OP_TYPE(OP_ADD); INPUT_OP(IEEE_Single, REG_OP(0), 0); INPUT_OP(IEEE_Single, MEMORY_OP, 0);
@@ -1811,7 +1814,15 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
                              INPUT_OP(IEEE_Double, REG_OP(1), 2); OUTPUT_OP(IEEE_Double, REG_OP(0), 0);
                              break;
         // }}}
+        // {{{ VEX arithmetic ops
+        case XED_IFORM_VADDSD_XMMdq_XMMdq_XMMq:
+            OP_TYPE(OP_ADD); INPUT_OP(IEEE_Double, REG_OP(0), 0); INPUT_OP(IEEE_Double, REG_OP(1), 0);
+                             OUTPUT_OP(IEEE_Double, REG_OP(0), 0); break;
+        //case XED_IFORM_VADDSD_XMMdq_XMMdq_MEMq:
+          //    OP_TYPE(OP_ADD); INPUT_OP(IEEE_Double, REG_OP(0), 0); INPUT_OP(IEEE_Double, MEMORY_OP, 0); mi++;
+            //                   OUTPUT_OP(IEEE_Double, REG_OP(1), 0); break;
 
+        //}}}
         // {{{ stuff to ignore
         case XED_IFORM_FXRSTOR_MEMmfpxenv:              // fp state save/restore
         case XED_IFORM_FXRSTOR64_MEMmfpxenv:
@@ -2109,6 +2120,7 @@ FPSemantics* FPDecoderXED::build(unsigned long index, void *addr, unsigned char 
     debugData << "decoded semantics:" << endl;
     debugData << semantics->toString() << endl;
     debugData << endl;
+    printf("%s\n",debugData.str().c_str());
     semantics->setDecoderDebugData(debugData.str());
 
     return semantics;
@@ -2128,7 +2140,7 @@ FPRegister FPDecoderXED::getX86Reg(FPSemantics *inst)
     assert(nbytes < 24);
     inst->getBytes(bytes);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         return REG_NONE;
     }
     xed_reg_enum_t reg = xed_decoded_inst_get_reg(&xedd, XED_OPERAND_REG0);
@@ -2151,7 +2163,7 @@ FPRegister FPDecoderXED::getX86RM(FPSemantics *inst)
     assert(nbytes < 24);
     inst->getBytes(bytes);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         return REG_NONE;
     }
     xed_reg_enum_t reg = xed_decoded_inst_get_reg(&xedd, XED_OPERAND_MEM0);
@@ -2178,7 +2190,7 @@ bool FPDecoderXED::readsFlags(FPSemantics *inst)
     assert(nbytes < 24);
     inst->getBytes(bytes);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         return REG_NONE;
     }
 
@@ -2208,7 +2220,7 @@ bool FPDecoderXED::writesFlags(FPSemantics *inst)
     assert(nbytes < 24);
     inst->getBytes(bytes);
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         return REG_NONE;
     }
 
@@ -2244,7 +2256,7 @@ string FPDecoderXED::disassemble(unsigned char *bytes, size_t nbytes)
     xed_decoded_inst_set_input_chip(&xedd, XED_CHIP_INVALID);
 
     xed_error = xed_decode(&xedd, (const xed_uint8_t*) bytes, nbytes);
-    if (xed_error != XED_ERROR_NONE) { 
+    if (xed_error != XED_ERROR_NONE) {
         return string("(invalid)");
     }
 
@@ -2252,4 +2264,3 @@ string FPDecoderXED::disassemble(unsigned char *bytes, size_t nbytes)
 }
 
 }
-
